@@ -1,0 +1,245 @@
+import pygame
+import sys
+import random
+import json
+import os
+
+# ---------- CONFIGURAÇÕES ----------
+WIDTH, HEIGHT = 800, 600
+FPS = 60
+MAX_PLAYERS = 4
+SAVE_DIR = "saves"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+# ---------- CORES ----------
+WHITE = (255, 255, 255)
+BLUE = (0, 0, 255)
+RED = (200, 0, 0)
+GREEN = (0, 200, 0)
+YELLOW = (255, 255, 0)
+BLACK = (0,0,0)
+PURPLE = (128, 0, 128)
+BROWN = (139,69,19)
+
+# ---------- SLOT DE SAVE ----------
+print("Escolha um slot de save (1-3): ")
+slot = input("> ").strip()
+if slot not in ["1","2","3"]:
+    slot = "1"
+SAVE_FILE = os.path.join(SAVE_DIR, f"save{slot}.json")
+
+# ---------- FUNÇÕES DE SAVE ----------
+def load_game():
+    if os.path.exists(SAVE_FILE):
+        with open(SAVE_FILE,"r") as f:
+            data = json.load(f)
+            return (data.get("player",{"x":100,"y":500}),
+                    data.get("health",3),
+                    data.get("ammo",10),
+                    data.get("score",0),
+                    data.get("zombies",[]),
+                    data.get("items",[]),
+                    data.get("weapons",[]),
+                    data.get("exit",{"x":WIDTH-70,"y":HEIGHT-100}))
+    return {"x":100,"y":500},3,10,0,[{"x":600,"y":HEIGHT-100}],[{"x":300,"y":410},{"x":650,"y":310}],[{"x":400,"y":420}],{"x":WIDTH-70,"y":HEIGHT-100}
+
+def save_game(player_pos, health, ammo, score, zombies, items, weapons, exit_pos):
+    data = {
+        "player":player_pos,
+        "health":health,
+        "ammo":ammo,
+        "score":score,
+        "zombies":zombies,
+        "items":items,
+        "weapons":weapons,
+        "exit":exit_pos
+    }
+    with open(SAVE_FILE,"w") as f:
+        json.dump(data,f)
+
+# ---------- INICIALIZAÇÃO ----------
+pygame.init()
+win = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Mundo-Zumbi - Apocalipse Zumbi 2D")
+
+clock = pygame.time.Clock()
+
+platforms = [pygame.Rect(0, HEIGHT-50, WIDTH,50),
+             pygame.Rect(250,450,200,20),
+             pygame.Rect(550,350,150,20)]
+
+# Carregar save
+player_pos, player_health, ammo, score, zombies_data, items_data, weapons_data, exit_pos = load_game()
+player_width, player_height = 50,50
+player_vel = 5
+jump = False
+jump_count = 10
+
+bullets = []
+bullet_vel = 10
+zombies = [pygame.Rect(z["x"],z["y"],50,50) for z in zombies_data]
+items = [pygame.Rect(i["x"],i["y"],20,20) for i in items_data]
+weapons = [pygame.Rect(w["x"],w["y"],30,15) for w in weapons_data]
+exit_rect = pygame.Rect(exit_pos["x"],exit_pos["y"],50,50)
+spawn_timer = 0
+
+# Lista de jogadores locais (simulação de multiplayer)
+players = [{"x":player_pos["x"],"y":player_pos["y"],"health":player_health,"ammo":ammo,"score":score}]
+
+# ---------- FUNÇÃO DE DESENHO ----------
+def draw():
+    win.fill(WHITE)
+    
+    for plat in platforms:
+        pygame.draw.rect(win,GREEN,plat)
+    
+    for zombie in zombies:
+        pygame.draw.rect(win,RED,zombie)
+    
+    for item in items:
+        pygame.draw.rect(win,PURPLE,item)
+    
+    for weapon in weapons:
+        pygame.draw.rect(win,BROWN,weapon)
+    
+    pygame.draw.rect(win,BLACK,exit_rect)
+    
+    for p in players:
+        pygame.draw.rect(win,BLUE,(p["x"],p["y"],player_width,player_height))
+    
+    for bullet in bullets:
+        pygame.draw.rect(win,YELLOW,bullet)
+    
+    # Vida
+    for i in range(players[0]["health"]):
+        pygame.draw.rect(win,RED,(10+i*30,10,20,20))
+    
+    # Munição
+    for i in range(players[0]["ammo"]):
+        pygame.draw.rect(win,YELLOW,(10+i*15,40,10,10))
+    
+    # Score
+    font = pygame.font.SysFont(None,30)
+    score_text = font.render(f"Score: {players[0]['score']}",True,BLACK)
+    win.blit(score_text,(WIDTH-120,10))
+    
+    pygame.display.update()
+
+# ---------- LOOP PRINCIPAL ----------
+run = True
+while run:
+    clock.tick(FPS)
+    spawn_timer +=1
+    
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            save_game({"x":players[0]["x"],"y":players[0]["y"]},
+                      players[0]["health"],
+                      players[0]["ammo"],
+                      players[0]["score"],
+                      [{"x":z.x,"y":z.y} for z in zombies],
+                      [{"x":i.x,"y":i.y} for i in items],
+                      [{"x":w.x,"y":w.y} for w in weapons],
+                      {"x":exit_rect.x,"y":exit_rect.y})
+            run = False
+    
+    keys = pygame.key.get_pressed()
+    
+    # Movimento jogador principal
+    if keys[pygame.K_LEFT]: players[0]["x"] -= player_vel
+    if keys[pygame.K_RIGHT]: players[0]["x"] += player_vel
+    if not jump:
+        if keys[pygame.K_SPACE]:
+            jump = True
+    else:
+        if jump_count >= -10:
+            neg = 1 if jump_count>=0 else -1
+            players[0]["y"] -= (jump_count**2)*0.5*neg
+            jump_count -=1
+        else:
+            jump = False
+            jump_count =10
+    
+    # Atirar
+    if keys[pygame.K_f] and players[0]["ammo"]>0:
+        if len(bullets)<5:
+            bullets.append(pygame.Rect(players[0]["x"]+player_width,players[0]["y"]+player_height//2-5,10,10))
+            players[0]["ammo"] -=1
+    
+    # Gravidade e plataformas
+    player_rect = pygame.Rect(players[0]["x"],players[0]["y"],player_width,player_height)
+    on_ground = False
+    for plat in platforms:
+        if player_rect.colliderect(plat) and players[0]["y"]+player_height <= plat.y+15:
+            players[0]["y"] = plat.y - player_height
+            on_ground = True
+            jump = False
+            jump_count =10
+    if not on_ground:
+        players[0]["y"] +=5
+    
+    # Zumbis
+    for zombie in zombies[:]:
+        if zombie.x < players[0]["x']: zombie.x +=2
+        elif zombie.x > players[0]["x"]: zombie.x -=2
+        if player_rect.colliderect(zombie):
+            players[0]["health"] -=1
+            zombies.remove(zombie)
+            if players[0]["health"]<=0:
+                print("Você morreu! – Mundo-Zumbi")
+                save_game({"x":players[0]["x"],"y":players[0]["y"]},
+                          players[0]["health"],
+                          players[0]["ammo"],
+                          players[0]["score"],
+                          [{"x":z.x,"y":z.y} for z in zombies],
+                          [{"x":i.x,"y":i.y} for i in items],
+                          [{"x":w.x,"y":w.y} for w in weapons],
+                          {"x":exit_rect.x,"y":exit_rect.y})
+                run = False
+    
+    # Projetéis
+    for bullet in bullets[:]:
+        bullet.x += 10
+        for zombie in zombies[:]:
+            if bullet.colliderect(zombie):
+                zombies.remove(zombie)
+                bullets.remove(bullet)
+                players[0]["score"] +=10
+        if bullet.x > WIDTH:
+            bullets.remove(bullet)
+    
+    # Coleta de itens
+    for item in items[:]:
+        if player_rect.colliderect(item):
+            players[0]["ammo"] +=5
+            players[0]["health"] = min(players[0]["health"]+1,5)
+            items.remove(item)
+    
+    # Coleta de armas
+    for weapon in weapons[:]:
+        if player_rect.colliderect(weapon):
+            players[0]["ammo"] +=15
+            weapons.remove(weapon)
+    
+    # Spawn zumbis
+    if spawn_timer > FPS*3:
+        zombies.append(pygame.Rect(random.randint(0,WIDTH-50),HEIGHT-100,50,50))
+        spawn_timer = 0
+    
+    # Saída de nível
+    if player_rect.colliderect(exit_rect):
+        print("Você completou o nível! – Mundo-Zumbi")
+        save_game({"x":players[0]["x"],"y":players[0]["y"]},
+                  players[0]["health"],
+                  players[0]["ammo"],
+                  players[0]["score"],
+                  [{"x":z.x,"y":z.y} for z in zombies],
+                  [{"x":i.x,"y":i.y} for i in items],
+                  [{"x":w.x,"y":w.y} for w in weapons],
+                  {"x":exit_rect.x,"y":exit_rect.y})
+        run = False
+    
+    draw()
+
+pygame.quit()
+sys.exit()
